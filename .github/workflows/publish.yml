@@ -59,9 +59,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos
-            runner: macos-26
-            file: Calendar-macOS-arm64.dmg
           - platform: windows
             runner: windows-2025
             file: Calendar-Windows-x64.exe
@@ -99,20 +96,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" packaging/calendar.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build macOS app
-        if: matrix.platform == 'macos'
-        run: |
-          test "$(uname -m)" = arm64
-          ./build.sh
-      - name: Build macOS disk image
-        if: matrix.platform == 'macos'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash packaging/macos.sh
       - uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.platform }}
@@ -152,7 +135,7 @@ jobs:
           import { join } from 'node:path';
           import { put } from '@vercel/blob';
 
-          const files = ['Calendar-macOS-arm64.dmg', 'Calendar-Windows-x64.exe', 'Calendar-Linux-amd64.deb'];
+          const files = ['Calendar-Windows-x64.exe', 'Calendar-Linux-amd64.deb'];
           const version = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
           for (const file of files) {
             const body = await openAsBlob(join(process.env.GITHUB_WORKSPACE, 'installers', file));
