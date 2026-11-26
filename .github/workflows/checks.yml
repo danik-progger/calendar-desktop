@@ -1,0 +1,28 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    timeout-minutes: 30
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust checks
+        run: rustup component add rustfmt clippy
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Type check all targets
+        run: cargo check --all-targets --locked
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked

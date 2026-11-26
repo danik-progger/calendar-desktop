@@ -1,0 +1,148 @@
+name: Publish desktop downloads
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-desktop
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-26
+            file: Calendar-macOS-arm64.dmg
+          - platform: windows
+            runner: windows-2025
+            file: Calendar-Windows-x64.exe
+          - platform: linux
+            runner: ubuntu-24.04
+            file: Calendar-Linux-amd64.deb
+    env:
+      CALENDAR_RELEASE_AUTH_BASE_URL: ${{ vars.AUTH_BASE_URL }}
+      CALENDAR_RELEASE_CALENDAR_API_URL: ${{ vars.CALENDAR_API_URL }}
+      CALENDAR_RELEASE_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.GOOGLE_DESKTOP_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check desktop connection settings
+        shell: bash
+        run: |
+          : "${CALENDAR_RELEASE_AUTH_BASE_URL:?Set the desktop AUTH_BASE_URL repository variable}"
+          : "${CALENDAR_RELEASE_CALENDAR_API_URL:?Set the desktop CALENDAR_API_URL repository variable}"
+          : "${CALENDAR_RELEASE_GOOGLE_DESKTOP_CLIENT_ID:?Set the desktop GOOGLE_DESKTOP_CLIENT_ID repository variable}"
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang dpkg-dev libfontconfig1-dev libfreetype6-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev pkg-config
+      - name: Build Linux package
+        if: matrix.platform == 'linux'
+        run: |
+          cargo build --locked --release
+          bash packaging/linux.sh
+          dpkg-deb --info Calendar-Linux-amd64.deb
+      - name: Build Windows installer
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          cargo build --locked --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" packaging/calendar.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build macOS app
+        if: matrix.platform == 'macos'
+        run: |
+          test "$(uname -m)" = arm64
+          ./build.sh
+      - name: Build macOS disk image
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash packaging/macos.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.platform }}
+          path: ${{ matrix.file }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: installers
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Install publisher
+        run: npm install --prefix "$RUNNER_TEMP" --no-save --no-package-lock --ignore-scripts @vercel/blob@2.9.0
+      - name: Publish installers and update desktop links
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::notice::A newer commit is on main. Keeping the current downloads."
+            exit 0
+          fi
+          cd "$RUNNER_TEMP"
+          node --input-type=module <<'JS'
+          import { openAsBlob } from 'node:fs';
+          import { join } from 'node:path';
+          import { put } from '@vercel/blob';
+
+          const files = {
+            macos: 'Calendar-macOS-arm64.dmg',
+            windows: 'Calendar-Windows-x64.exe',
+            linux: 'Calendar-Linux-amd64.deb',
+          };
+          const version = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+          const release = {};
+          for (const [platform, file] of Object.entries(files)) {
+            const body = await openAsBlob(join(process.env.GITHUB_WORKSPACE, 'installers', file));
+            if (!body.size) throw new Error(`Empty installer: ${file}`);
+            const blob = await put(`calendar/desktop/${version}/${file}`, body, {
+              access: 'public',
+              addRandomSuffix: false,
+              multipart: true,
+            });
+            release[platform] = blob.downloadUrl;
+          }
+          await put('calendar/latest/desktop.json', JSON.stringify(release), {
+            access: 'public',
+            addRandomSuffix: false,
+            allowOverwrite: true,
+            cacheControlMaxAge: 60,
+            contentType: 'application/json',
+          });
+          JS

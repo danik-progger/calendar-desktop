@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Calendar
+Exec=calendar-gpui
+Icon=dev.calendar.gpui
+Terminal=false
+Categories=Office;Calendar;
