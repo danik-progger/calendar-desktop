@@ -35,7 +35,7 @@ Desktop preserves event notes, calendar categories, and presentation metadata. T
 
 Verified on macOS. Other desktop platforms have not been tested.
 
-The [publish workflow](.github/workflows/publish.yml) builds an Apple silicon DMG, Windows x64 EXE installer, and Linux amd64 DEB on `main`. After all three succeed, it updates the desktop links on the landing page. See [release setup](../shared/RELEASES.md).
+The [publish workflow](.github/workflows/publish.yml) builds an Apple silicon DMG, Windows x64 EXE installer, and Linux amd64 DEB on `main`. After all three succeed, it updates the desktop links on the landing page. Automatic releases skip if any of the three connection variables or `BLOB_READ_WRITE_TOKEN` is missing. Run the workflow manually on `main` to see missing settings reported as an error. See [release setup](../shared/RELEASES.md).
 
 ## Checks
 

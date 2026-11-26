@@ -13,8 +13,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  configuration:
     if: github.ref == 'refs/heads/main'
+    name: Check desktop release configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          AUTH_BASE_URL: ${{ vars.AUTH_BASE_URL }}
+          CALENDAR_API_URL: ${{ vars.CALENDAR_API_URL }}
+          GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.GOOGLE_DESKTOP_CLIENT_ID }}
+          HAS_BLOB_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN != '' }}
+        shell: bash
+        run: |
+          missing=()
+          for name in AUTH_BASE_URL CALENDAR_API_URL GOOGLE_DESKTOP_CLIENT_ID; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "$HAS_BLOB_TOKEN" != true ]]; then
+            missing+=(BLOB_READ_WRITE_TOKEN)
+          fi
+
+          if (( ${#missing[@]} == 0 )); then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            echo "::error::Set these desktop release settings before publishing: ${missing[*]}"
+            exit 1
+          else
+            echo "::notice::Skipping desktop release. Missing settings: ${missing[*]}"
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: configuration
+    if: needs.configuration.outputs.ready == 'true'
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
@@ -39,12 +76,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Check desktop connection settings
-        shell: bash
-        run: |
-          : "${CALENDAR_RELEASE_AUTH_BASE_URL:?Set the desktop AUTH_BASE_URL repository variable}"
-          : "${CALENDAR_RELEASE_CALENDAR_API_URL:?Set the desktop CALENDAR_API_URL repository variable}"
-          : "${CALENDAR_RELEASE_GOOGLE_DESKTOP_CLIENT_ID:?Set the desktop GOOGLE_DESKTOP_CLIENT_ID repository variable}"
       - name: Install Linux build dependencies
         if: matrix.platform == 'linux'
         run: |
